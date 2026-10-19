@@ -2,9 +2,8 @@ import uvicorn
 from fastapi import FastAPI
 from routes import router
 
-app = FastAPI(title="On-Premise Agentic RAG API")
+app = FastAPI(title="Jubilee Life RPA & AI Portal API")
 
-# Include API routes
 app.include_router(router)
 
 if __name__ == "__main__":
