@@ -50,13 +50,13 @@ def home():
 
 @router.post("/analyze/document", response_model=DocumentAnalysisResponse)
 async def analyze_document(file: UploadFile = File(...)):
-
     try:
         file_bytes = await file.read()
         if not file_bytes:
             raise HTTPException(status_code=400, detail="Uploaded document is empty.")
 
-        page_count = get_document_page_count(file_bytes, file.filename)
+        filename = file.filename or "uploaded_document.pdf"
+        page_count = get_document_page_count(file_bytes, filename)
         mime_type = file.content_type or "application/pdf"
 
         prompt = (
@@ -67,7 +67,7 @@ async def analyze_document(file: UploadFile = File(...)):
         )
 
         response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=[
                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
                 prompt
@@ -79,11 +79,14 @@ async def analyze_document(file: UploadFile = File(...)):
             )
         )
 
+        if not response.text:
+            raise HTTPException(status_code=500, detail="Gemini model returned an empty response.")
+
         result = DocumentAnalysisResponse.model_validate_json(response.text)
         result.page_count = page_count
 
-        if file_search_store:
-            temp_filename = f"temp_{file.filename}"
+        if file_search_store and file_search_store.name:
+            temp_filename = f"temp_{filename}"
             try:
                 with open(temp_filename, "wb") as f:
                     f.write(file_bytes)
@@ -91,7 +94,7 @@ async def analyze_document(file: UploadFile = File(...)):
                 op = gemini_client.file_search_stores.upload_to_file_search_store(
                     file_search_store_name=file_search_store.name,
                     file=temp_filename,
-                    config={"display_name": f"Claim Document - {file.filename}"}
+                    config={"display_name": f"Claim Document - {filename}"}
                 )
                 while not op.done:
                     time.sleep(1)
@@ -112,8 +115,7 @@ async def analyze_document(file: UploadFile = File(...)):
 
 @router.post("/ingest/text")
 def ingest_text(request: IngestTextRequest):
-
-    if not file_search_store:
+    if not file_search_store or not file_search_store.name:
         raise HTTPException(status_code=500, detail="File Store is not initialized.")
 
     temp_filename = f"{request.document_id}.txt"
@@ -140,11 +142,11 @@ def ingest_text(request: IngestTextRequest):
 
 @router.post("/ingest/policy-document")
 async def ingest_policy_document(file: UploadFile = File(...)):
-
-    if not file_search_store:
+    if not file_search_store or not file_search_store.name:
         raise HTTPException(status_code=500, detail="File Store is not initialized.")
 
-    temp_path = f"temp_{file.filename}"
+    filename = file.filename or "policy_document.pdf"
+    temp_path = f"temp_{filename}"
     try:
         file_bytes = await file.read()
         if not file_bytes:
@@ -156,7 +158,7 @@ async def ingest_policy_document(file: UploadFile = File(...)):
         operation = gemini_client.file_search_stores.upload_to_file_search_store(
             file_search_store_name=file_search_store.name,
             file=temp_path,
-            config={"display_name": f"Policy File - {file.filename}"}
+            config={"display_name": f"Policy File - {filename}"}
         )
         while not operation.done:
             time.sleep(1)
@@ -164,7 +166,7 @@ async def ingest_policy_document(file: UploadFile = File(...)):
 
         return {
             "status": "success",
-            "message": f"Policy document '{file.filename}' successfully uploaded and indexed in File Search Store."
+            "message": f"Policy document '{filename}' successfully uploaded and indexed in File Search Store."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload policy document: {str(e)}")
@@ -175,33 +177,38 @@ async def ingest_policy_document(file: UploadFile = File(...)):
 
 @router.post("/chat")
 def chat_endpoint(request: ChatRequest):
-
-    if not file_search_store:
+    if not file_search_store or not file_search_store.name:
         raise HTTPException(status_code=500, detail="File Store is not initialized.")
+
+    store_name: str = file_search_store.name
 
     if request.session_id not in chat_sessions:
         chat_sessions[request.session_id] = gemini_client.chats.create(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             config=types.GenerateContentConfig(
-                temperature=0.1,
+                temperature=0.0,
                 tools=[
                     types.Tool(
                         file_search=types.FileSearch(
-                            file_search_store_names=[file_search_store.name]
+                            file_search_store_names=[store_name]
                         )
                     )
                 ],
                 system_instruction=(
-                    "You are an RPA AI Assistant for Jubilee Life Insurance. "
-                    "You have access to a managed File Search Store containing: "
-                    "1. Jubilee Life IT and IS (Information Security) Policies. "
-                    "2. Customer Claim Documents, Medical Files, and Receipts. "
-                    "When the user asks a question (e.g., policy rules or claim details), "
-                    "YOU MUST use the file_search tool to find relevant information and respond strictly based on the retrieved contents."
+                    "You are a strict RPA AI Assistant for Jubilee Life Insurance. "
+                    "You have access to a File Search Store containing IT/IS Policies and Claim Documents. "
+                    "Follow these rules strictly:\n"
+                    "1. STRICT GROUNDING: You MUST base your answers ONLY on the documents retrieved from the file_search tool.\n"
+                    "2. NO EXTERNAL KNOWLEDGE: If the user asks about topics not covered in the provided documents (e.g., general knowledge, clothing, random facts), you MUST decline to answer and state: 'I can only provide information based on Jubilee Life official documents.' Do NOT invent answers.\n"
+                    "3. MANDATORY CITATIONS: For every fact or conceptual explanation, you MUST append an inline citation at the end of the sentence or bullet point indicating the exact source document."
                 )
             )
         )
 
     chat = chat_sessions[request.session_id]
     response = chat.send_message(request.prompt)
+    
+    if not response.text:
+        return {"response": "No response generated."}
+        
     return {"response": response.text}
