@@ -36,7 +36,8 @@ class PrescriptionItem(BaseModel):
 
 
 class ClaimAttributes(BaseModel):
-    document_type: Optional[str] = Field(default=None, description="inpatient or outpatient")
+    document_type: Optional[str] = Field(default=None, description="'inpatient', 'outpatient', or 'Not a Claim'")
+    no_of_pages: Optional[int] = Field(default=None, description="Total number of pages in the claim document")
     employee_name: Optional[str] = Field(default=None, description="Name of the employee or patient")
     employee_claim_no: Optional[str] = Field(default=None, description="Employee claim number if visible")
     employee_contact_no: Optional[str] = Field(default=None, description="Contact number of employee/patient")
@@ -51,7 +52,8 @@ class ClaimAttributes(BaseModel):
     document_submitted_date: Optional[str] = Field(default=None, description="Submission date if present")
     document_received_date: Optional[str] = Field(default=None, description="Received date if present")
     prescription_attached: bool = Field(default=False, description="True if prescription documents are present")
-    prescription_items: List[PrescriptionItem] = Field(default_factory=list, description="List of items/medicines prescribed")
+    prescription_items: List[PrescriptionItem] = Field(default_factory=list,
+                                                       description="List of items/medicines prescribed")
 
 
 class DocumentAnalysisResponse(BaseModel):
@@ -76,7 +78,6 @@ def home():
 
 @router.post("/analyze/document", response_model=DocumentAnalysisResponse)
 async def analyze_document(file: UploadFile = File(...)):
-
     try:
         file_bytes = await file.read()
         if not file_bytes:
@@ -87,12 +88,13 @@ async def analyze_document(file: UploadFile = File(...)):
         mime_type = file.content_type or "application/pdf"
 
         prompt = (
-            "Analyze this document for Jubilee Life RPA processing. Extract the following details strictly into the schema:\n"
-            "1. Determine document_type as 'inpatient' or 'outpatient'. Set submitted_by_employee to True if outpatient, False if inpatient.\n"
-            "2. Extract employee_name, employee_claim_no, employee_contact_no, document_submitted_date, and document_received_date.\n"
-            "3. Provide a document_summary.\n"
-            "4. Check if bills are attached (bills_attached = True/False), extract total_bill_amount, and list all itemized bill_summary_items.\n"
-            "5. Check if prescriptions are attached (prescription_attached = True/False) and extract itemized prescription_items."
+            "Analyze this document for Jubilee Life RPA processing. STRICT RULES:\n"
+            "1. VALIDATION FIRST: Check if this is actually a medical claim, hospital receipt, or prescription. If it is a random, unrelated, or invalid document, set `is_customer_document` to False, set `document_type` to 'Not a Claim', and leave all other claim attributes empty/null.\n"
+            "2. If it is a valid claim, determine document_type strictly as 'inpatient' or 'outpatient'. Set submitted_by_employee to True if outpatient, False if inpatient.\n"
+            "3. Extract employee_name, employee_claim_no, employee_contact_no, document_submitted_date, and document_received_date.\n"
+            "4. Provide a document_summary.\n"
+            "5. Check if bills are attached (bills_attached = True/False), extract total_bill_amount, and list all itemized bill_summary_items.\n"
+            "6. Check if prescriptions are attached (prescription_attached = True/False) and extract itemized prescription_items."
         )
 
         response = gemini_client.models.generate_content(
@@ -102,7 +104,7 @@ async def analyze_document(file: UploadFile = File(...)):
                 prompt
             ],
             config=types.GenerateContentConfig(
-                temperature=0.1,
+                temperature=0.0,
                 response_mime_type="application/json",
                 response_schema=DocumentAnalysisResponse,
             )
@@ -112,7 +114,9 @@ async def analyze_document(file: UploadFile = File(...)):
             raise HTTPException(status_code=500, detail="Gemini model returned an empty response.")
 
         result = DocumentAnalysisResponse.model_validate_json(response.text)
+
         result.page_count = page_count
+        result.claim_attributes.no_of_pages = page_count
 
         return result
 
