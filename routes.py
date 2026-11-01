@@ -36,14 +36,14 @@ class PrescriptionItem(BaseModel):
 
 
 class ClaimAttributes(BaseModel):
-    document_type: Optional[str] = Field(default=None, description="'inpatient', 'outpatient', or 'Not a Claim'")
+    document_type: Optional[str] = Field(default=None, description="'Inpatient', 'Outpatient', or 'Not a Claim'")
     no_of_pages: Optional[int] = Field(default=None, description="Total number of pages in the claim document")
     employee_name: Optional[str] = Field(default=None, description="Name of the employee or patient")
     employee_claim_no: Optional[str] = Field(default=None, description="Employee claim number if visible")
     employee_contact_no: Optional[str] = Field(default=None, description="Contact number of employee/patient")
     submitted_by_employee: Optional[bool] = Field(
         default=None,
-        description="True if document_type is outpatient (submitted by employee), False if inpatient"
+        description="True if document_type is Outpatient (submitted by employee), False if Inpatient"
     )
     document_summary: Optional[str] = Field(default=None, description="Short summary of the document content")
     bills_attached: bool = Field(default=False, description="True if bills or payment receipts are present")
@@ -90,15 +90,17 @@ async def analyze_document(file: UploadFile = File(...)):
         prompt = (
             "Analyze this document for Jubilee Life RPA processing. STRICT RULES:\n"
             "1. VALIDATION FIRST: Check if this is actually a medical claim, hospital receipt, or prescription. If it is a random, unrelated, or invalid document, set `is_customer_document` to False, set `document_type` to 'Not a Claim', and leave all other claim attributes empty/null.\n"
-            "2. If it is a valid claim, determine document_type strictly as 'inpatient' or 'outpatient'. Set submitted_by_employee to True if outpatient, False if inpatient.\n"
+            "2. If it is a valid claim, determine document_type strictly as 'Inpatient' or 'Outpatient'. Set submitted_by_employee to True if Outpatient, False if Inpatient.\n"
             "3. Extract employee_name, employee_claim_no, employee_contact_no, document_submitted_date, and document_received_date.\n"
+            "   - For employee_claim_no: If 'Inpatient', extract the 'Reg#'. If 'Outpatient', extract the handwritten code written with a slash or like a fraction. The final output MUST always be slash-separated (e.g., 123/456).\n"
+            "   - For document_received_date: If the received date stamp is very unclear, output exactly 'Unclear - cannot be decided'.\n"
             "4. Provide a document_summary.\n"
             "5. Check if bills are attached (bills_attached = True/False), extract total_bill_amount, and list all itemized bill_summary_items.\n"
             "6. Check if prescriptions are attached (prescription_attached = True/False) and extract itemized prescription_items."
         )
 
         response = gemini_client.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.8-flash",
             contents=[
                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
                 prompt
@@ -224,7 +226,7 @@ def chat_endpoint(request: ChatRequest):
         )
 
     chat = gemini_client.chats.create(
-        model="gemini-3.6-flash",
+        model="gemini-3.8-flash",
         history=gemini_history,
         config=types.GenerateContentConfig(
             temperature=0.0,
